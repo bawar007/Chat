@@ -1,0 +1,28 @@
+{
+  "totalPages": 183,
+  "totalChunks": 7750,
+  "totalEmbeddings": 7750,
+  "pageTypes": {
+    "category": 30,
+    "shops": 1,
+    "about": 1,
+    "contact": 1,
+    "faq": 1,
+    "returns": 2,
+    "terms": 2,
+    "privacy": 2,
+    "warranty": 2,
+    "payment": 2,
+    "downloads": 1,
+    "howto": 1,
+    "product": 137
+  },
+  "scrapedAt": "2025-09-23T10:10:07.816Z",
+  "deduplicationStats": {
+    "discoveredProductUrls": 0,
+    "discoveredCategoryUrls": 0,
+    "processedEmbeddings": 179,
+    "globalProductLinks": 0,
+    "visitedUrls": 0
+  }
+}

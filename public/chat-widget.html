@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Chat Asystenta</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+      }
+      #chat-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 320px;
+        max-height: 500px;
+        display: flex;
+        flex-direction: column;
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        overflow: hidden;
+        font-size: 14px;
+      }
+      #chat-header {
+        background: #0077cc;
+        color: #fff;
+        padding: 10px;
+        font-weight: bold;
+      }
+      #chat-messages {
+        flex: 1;
+        padding: 10px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+      }
+      .message {
+        margin: 8px 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        max-width: 80%;
+        word-wrap: break-word;
+      }
+      .user {
+        background: #f2f2f2;
+        align-self: flex-start;
+        color: #333;
+      }
+      .bot {
+        background: #0077cc;
+        color: white;
+        align-self: flex-end;
+      }
+      #chat-input {
+        display: flex;
+        border-top: 1px solid #ddd;
+      }
+      #chat-input input {
+        flex: 1;
+        border: none;
+        padding: 10px;
+        font-size: 14px;
+        outline: none;
+      }
+
+      #chat-input input:disabled {
+        background: #f5f5f5;
+        color: #999;
+      }
+
+      #chat-input button {
+        border: none;
+        background: #0077cc;
+        color: white;
+        padding: 0 16px;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      #chat-input button:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+      }
+      #chat-quick {
+        padding: 8px;
+        border-top: 1px solid #eee;
+        background: #fafafa;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #chat-quick button {
+        border: 1px solid #ddd;
+        background: white;
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+
+      #chat-quick button:disabled {
+        background: #f5f5f5;
+        color: #999;
+        cursor: not-allowed;
+        border-color: #eee;
+      }
+
+      /* Animacja kropeczek podczas oczekiwania */
+      .typing-indicator {
+        background: #0077cc !important;
+        padding: 12px 16px !important;
+        border-radius: 8px;
+        align-self: flex-end;
+        max-width: 80px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .typing-dots {
+        display: flex;
+        gap: 4px;
+      }
+
+      .typing-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: white;
+        animation: typing 1.4s infinite ease-in-out;
+      }
+
+      .typing-dot:nth-child(1) {
+        animation-delay: 0ms;
+      }
+
+      .typing-dot:nth-child(2) {
+        animation-delay: 200ms;
+      }
+
+      .typing-dot:nth-child(3) {
+        animation-delay: 400ms;
+      }
+
+      @keyframes typing {
+        0%,
+        60%,
+        100% {
+          opacity: 0.3;
+          transform: scale(0.8);
+        }
+        30% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="chat-container">
+      <div id="chat-header">Asystent sklepu</div>
+      <div id="chat-messages"></div>
+
+      <div id="chat-quick">
+        <button>Czy macie rowery górskie?</button>
+        <button>Gdzie znajdę promocje?</button>
+        <button>Czy są rowery dla dzieci?</button>
+      </div>
+
+      <div id="chat-input">
+        <input
+          type="text"
+          id="message-input"
+          placeholder="Napisz wiadomość..."
+        />
+        <button id="send-btn">➤</button>
+      </div>
+    </div>
+
+    <script>
+      const messagesEl = document.getElementById("chat-messages");
+      const inputEl = document.getElementById("message-input");
+      const sendBtn = document.getElementById("send-btn");
+      
+      // Wygeneruj unikalny sessionId dla tej sesji
+      const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+
+      function addMessage(text, sender) {
+        const div = document.createElement("div");
+        div.classList.add("message", sender);
+        div.innerHTML = text;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+      }
+
+      function showTypingIndicator() {
+        const div = document.createElement("div");
+        div.classList.add("message", "typing-indicator");
+        div.innerHTML = `
+          <div class="typing-dots">
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+            <div class="typing-dot"></div>
+          </div>
+        `;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+      }
+
+      function removeTypingIndicator(indicator) {
+        if (indicator && indicator.parentNode) {
+          indicator.parentNode.removeChild(indicator);
+        }
+      }
+
+      async function sendMessage(msg) {
+        // Blokuj interfejs podczas oczekiwania
+        inputEl.disabled = true;
+        sendBtn.disabled = true;
+        document
+          .querySelectorAll("#chat-quick button")
+          .forEach((btn) => (btn.disabled = true));
+
+        addMessage(msg, "user");
+        inputEl.value = "";
+
+        // Pokazuj animację kropeczek
+        const typingIndicator = showTypingIndicator();
+
+        try {
+          const res = await fetch("http://localhost:3000/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: msg, sessionId: sessionId }),
+          });
+          const data = await res.json();
+
+          // Usuń animację kropeczek
+          removeTypingIndicator(typingIndicator);
+
+          addMessage(data.response, "bot");
+        } catch (error) {
+          // Usuń animację kropeczek w przypadku błędu
+          removeTypingIndicator(typingIndicator);
+
+          addMessage(
+            "Przepraszam, wystąpił błąd podczas wysyłania wiadomości. Spróbuj ponownie.",
+            "bot"
+          );
+        } finally {
+          // Odblokuj interfejs
+          inputEl.disabled = false;
+          sendBtn.disabled = false;
+          document
+            .querySelectorAll("#chat-quick button")
+            .forEach((btn) => (btn.disabled = false));
+          inputEl.focus();
+        }
+      }
+
+      sendBtn.addEventListener("click", () => {
+        const msg = inputEl.value.trim();
+        if (msg) sendMessage(msg);
+      });
+
+      inputEl.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") {
+          sendBtn.click();
+        }
+      });
+
+      document.querySelectorAll("#chat-quick button").forEach((btn) => {
+        btn.addEventListener("click", () => sendMessage(btn.textContent));
+      });
+    </script>
+  </body>
+</html>
