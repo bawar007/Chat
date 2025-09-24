@@ -1,5 +1,5 @@
-import axios from 'axios';
-import * as cheerio from 'cheerio';
+import axios from "axios";
+import * as cheerio from "cheerio";
 
 // Skopiuj funkcję parseProductData z crawler.js (linia 347-886)
 function parseProductData($, url) {
@@ -75,33 +75,37 @@ function parseProductData($, url) {
 
   // Najpierw sprawdź JSON-LD schema.org dla dostępności
   const jsonLdScripts = $('script[type="application/ld+json"]');
-  jsonLdScripts.each(function() {
+  jsonLdScripts.each(function () {
     try {
       const data = JSON.parse($(this).html());
-      if (data['@graph']) {
-        for (const item of data['@graph']) {
-          if (item['@type'] === 'Product' && item.offers) {
+      if (data["@graph"]) {
+        for (const item of data["@graph"]) {
+          if (item["@type"] === "Product" && item.offers) {
             if (Array.isArray(item.offers)) {
               for (const offer of item.offers) {
                 if (offer.availability) {
                   const avail = offer.availability;
-                  if (avail.includes('InStock')) {
-                    product.availability = 'dostępny';
-                  } else if (avail.includes('OutOfStock')) {
-                    product.availability = 'niedostępny';
+                  if (avail.includes("InStock")) {
+                    product.availability = "dostępny";
+                  } else if (avail.includes("OutOfStock")) {
+                    product.availability = "niedostępny";
                   }
-                  console.log(`   📦 Dostępność (JSON-LD): "${product.availability}" z ${avail}`);
+                  console.log(
+                    `   📦 Dostępność (JSON-LD): "${product.availability}" z ${avail}`
+                  );
                   return false; // break z each
                 }
               }
             } else if (item.offers.availability) {
               const avail = item.offers.availability;
-              if (avail.includes('InStock')) {
-                product.availability = 'dostępny';
-              } else if (avail.includes('OutOfStock')) {
-                product.availability = 'niedostępny';
+              if (avail.includes("InStock")) {
+                product.availability = "dostępny";
+              } else if (avail.includes("OutOfStock")) {
+                product.availability = "niedostępny";
               }
-              console.log(`   📦 Dostępność (JSON-LD single): "${product.availability}" z ${avail}`);
+              console.log(
+                `   📦 Dostępność (JSON-LD single): "${product.availability}" z ${avail}`
+              );
               return false; // break z each
             }
           }
@@ -146,9 +150,9 @@ function parseProductData($, url) {
         console.log(`   🎨 Kolor z data-value: "${colorName}"`);
       }
     });
-    
+
     if (product.colors.length > 0) {
-      console.log(`   🎨 Wszystkie kolory: [${product.colors.join(', ')}]`);
+      console.log(`   🎨 Wszystkie kolory: [${product.colors.join(", ")}]`);
     }
   } else {
     console.log(`   🎨 Brak .color-attribute-select na stronie`);
@@ -172,17 +176,21 @@ function parseProductData($, url) {
 
 async function testFullParser() {
   try {
-    console.log('🎯 TEST KOMPLETNEGO PARSERA PRODUKTU\n');
-    
-    const response = await axios.get('https://www.tabou.pl/produkt/rower-dzieciecy-tabou-rocket-cs-alu/');
+    console.log("🎯 TEST KOMPLETNEGO PARSERA PRODUKTU\n");
+
+    const response = await axios.get(
+      "https://www.tabou.pl/produkt/rower-dzieciecy-tabou-rocket-cs-alu/"
+    );
     const $ = cheerio.load(response.data);
-    
-    const product = parseProductData($, 'https://www.tabou.pl/produkt/rower-dzieciecy-tabou-rocket-cs-alu/');
-    
-    console.log('\n✅ PARSER ZAKOŃCZYŁ PRACĘ');
-    
+
+    const product = parseProductData(
+      $,
+      "https://www.tabou.pl/produkt/rower-dzieciecy-tabou-rocket-cs-alu/"
+    );
+
+    console.log("\n✅ PARSER ZAKOŃCZYŁ PRACĘ");
   } catch (err) {
-    console.error('❌ Błąd:', err.message);
+    console.error("❌ Błąd:", err.message);
   }
 }
 

@@ -1,18 +1,18 @@
 // Test czy serwer poprawnie priorytetyzuje produkty
-import fetch from 'node-fetch';
+import fetch from "node-fetch";
 
 async function testColorQuery() {
   try {
-    console.log('🧪 Testowanie pytania o kolory...');
-    
-    const response = await fetch('http://localhost:3000/chat', {
-      method: 'POST',
+    console.log("🧪 Testowanie pytania o kolory...");
+
+    const response = await fetch("http://localhost:3000/chat", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        message: 'Jakie są popularne kolory rowerów TABOU?'
-      })
+        message: "Jakie są popularne kolory rowerów TABOU?",
+      }),
     });
 
     if (!response.ok) {
@@ -20,11 +20,10 @@ async function testColorQuery() {
     }
 
     const data = await response.json();
-    console.log('✅ Odpowiedź otrzymana:');
+    console.log("✅ Odpowiedź otrzymana:");
     console.log(data.response);
-    
   } catch (error) {
-    console.error('❌ Błąd:', error.message);
+    console.error("❌ Błąd:", error.message);
   }
 }
 

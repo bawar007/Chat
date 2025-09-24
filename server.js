@@ -35,29 +35,29 @@ function getSessionHistory(sessionId) {
 function addToSession(sessionId, userMessage, botResponse) {
   const history = getSessionHistory(sessionId);
   history.push({ user: userMessage, bot: botResponse });
-  
+
   // Ogranicz historię do ostatnich 10 wymian (20 wiadomości)
   if (history.length > 10) {
     history.splice(0, history.length - 10);
   }
-  
+
   sessionMemory.set(sessionId, history);
 }
 
 function cosineSimilarity(vecA, vecB) {
   if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-  
+
   const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
   const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
   const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-  
+
   return dotProduct / (magnitudeA * magnitudeB);
 }
 
 // Funkcja wczytywania wszystkich plików embedding
 function loadAllEmbeddingFiles() {
   let allDocs = [];
-  
+
   // Wczytaj główny plik tabou.json
   try {
     console.log("📂 Szukam pliku: data/tabou.json");
@@ -71,19 +71,23 @@ function loadAllEmbeddingFiles() {
   } catch (err) {
     console.warn("⚠️ Błąd wczytywania tabou.json:", err.message);
   }
-  
+
   // Wczytaj pliki części (tabou_part1.json, tabou_part2.json, ...)
   try {
     const dataDir = "data";
     const files = fs.readdirSync(dataDir);
-    const partFiles = files.filter(file => file.match(/^tabou_part\d+\.json$/));
-    
+    const partFiles = files.filter((file) =>
+      file.match(/^tabou_part\d+\.json$/)
+    );
+
     let totalPartDocs = 0;
-    
+
     for (const partFile of partFiles) {
       try {
         console.log(`📂 Szukam pliku: ${dataDir}/${partFile}`);
-        const partData = JSON.parse(fs.readFileSync(path.join(dataDir, partFile), "utf8"));
+        const partData = JSON.parse(
+          fs.readFileSync(path.join(dataDir, partFile), "utf8")
+        );
         if (Array.isArray(partData) && partData.length > 0) {
           allDocs = allDocs.concat(partData);
           totalPartDocs += partData.length;
@@ -93,14 +97,16 @@ function loadAllEmbeddingFiles() {
         console.warn(`⚠️ Błąd wczytywania ${partFile}:`, err.message);
       }
     }
-    
+
     if (totalPartDocs > 0) {
-      console.log(`📁 Łącznie wczytano ${totalPartDocs} dokumentów z ${partFiles.length} plików części`);
+      console.log(
+        `📁 Łącznie wczytano ${totalPartDocs} dokumentów z ${partFiles.length} plików części`
+      );
     }
   } catch (err) {
     console.warn("⚠️ Błąd odczytu katalogu data:", err.message);
   }
-  
+
   return allDocs;
 }
 
@@ -139,12 +145,12 @@ async function getEmbedding(text) {
       }),
     });
     const data = await resp.json();
-    
+
     if (data.error) {
       console.error("❌ Błąd API OpenAI Embeddings:", data.error);
       return null;
     }
-    
+
     return data.data[0].embedding;
   } catch (error) {
     console.error("❌ Błąd podczas tworzenia embedding:", error);
@@ -155,43 +161,51 @@ async function getEmbedding(text) {
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, sessionId } = req.body;
-    
+
     if (!message) {
       return res.status(400).json({ error: "Brak wiadomości" });
     }
 
     // Domyślny sessionId jeśli nie podano
-    const currentSessionId = sessionId || 'default_session_' + Date.now();
-    
+    const currentSessionId = sessionId || "default_session_" + Date.now();
+
     // Pobierz historię konwersacji dla sesji
     const conversationHistory = getSessionHistory(currentSessionId);
-    console.log(`💭 Sesja ${currentSessionId}: historia ${conversationHistory.length} wymian`);
+    console.log(
+      `💭 Sesja ${currentSessionId}: historia ${conversationHistory.length} wymian`
+    );
 
     console.log(`❓ Pytanie: ${message}`);
 
     const queryEmbedding = await getEmbedding(message);
     if (!queryEmbedding) {
-      return res.status(500).json({ error: "Nie udało się przetworzyć zapytania" });
+      return res
+        .status(500)
+        .json({ error: "Nie udało się przetworzyć zapytania" });
     }
 
-    // Dodatkowe filtrowanie: jeśli pytanie ewidentnie dotyczy produktu, 
+    // Dodatkowe filtrowanie: jeśli pytanie ewidentnie dotyczy produktu,
     // odfiltrowuj dokumenty general i FAQ
     const query = message.toLowerCase();
     let candidateDocs = docs;
-    
-    const isProductQuery = query.match(/rower|bike|trek|giant|specialized|kask|hamulce|przerzutka|koła|rama|cena|koszt|ile|kupić|sprzedaż|produkt|model|dostępny|najtańszy|najdroższy/);
-    
+
+    const isProductQuery = query.match(
+      /rower|bike|trek|giant|specialized|kask|hamulce|przerzutka|koła|rama|cena|koszt|ile|kupić|sprzedaż|produkt|model|dostępny|najtańszy|najdroższy/
+    );
+
     if (isProductQuery) {
       // Filtruj dokumenty aby wykluczyć general i FAQ gdy pytanie jest o produkt
-      const filteredDocs = docs.filter(doc => {
-        const type = doc.metadata?.type || 'unknown';
-        return type !== 'general' && type !== 'faq';
+      const filteredDocs = docs.filter((doc) => {
+        const type = doc.metadata?.type || "unknown";
+        return type !== "general" && type !== "faq";
       });
-      
+
       // Użyj filtrowanych dokumentów jeśli mamy wystarczająco produktów/kategorii
       if (filteredDocs.length >= 5) {
         candidateDocs = filteredDocs;
-        console.log(`🎯 Filtrowanie general/FAQ: ${docs.length} → ${candidateDocs.length} dokumentów`);
+        console.log(
+          `🎯 Filtrowanie general/FAQ: ${docs.length} → ${candidateDocs.length} dokumentów`
+        );
       }
     }
 
@@ -202,82 +216,116 @@ app.post("/api/chat", async (req, res) => {
       }))
       .sort((a, b) => {
         // Sprawdź czy klient prosi o sortowanie po cenie
-        if (query.toLowerCase().match(/tańsze|taniej|najtańsze|budżetowe|po cenie|do.*zł/)) {
+        if (
+          query
+            .toLowerCase()
+            .match(/tańsze|taniej|najtańsze|budżetowe|po cenie|do.*zł/)
+        ) {
           const extractPrice = (doc) => {
             const priceMatch = doc.text.match(/(\d+(?:[\s.,]\d{3})*)\s*zł/);
-            return priceMatch ? parseFloat(priceMatch[1].replace(/[\s.,]/g, '')) : Infinity;
+            return priceMatch
+              ? parseFloat(priceMatch[1].replace(/[\s.,]/g, ""))
+              : Infinity;
           };
-          
+
           const priceA = extractPrice(a);
           const priceB = extractPrice(b);
-          
+
           if (priceA !== Infinity && priceB !== Infinity) {
             return priceA - priceB; // sortuj po cenie rosnąco
           }
         }
-        
+
         return b.score - a.score; // domyślnie po podobieństwie
       })
       .slice(0, 15);
 
-    console.log(`🔍 Wybrano ${ranked.length} najlepszych dopasowań (score: ${ranked[0]?.score.toFixed(3)} - ${ranked[ranked.length-1]?.score.toFixed(3)})`);
+    console.log(
+      `🔍 Wybrano ${
+        ranked.length
+      } najlepszych dopasowań (score: ${ranked[0]?.score.toFixed(3)} - ${ranked[
+        ranked.length - 1
+      ]?.score.toFixed(3)})`
+    );
 
     // Grupowanie wyników według typu dla lepszej organizacji
     const groupedResults = {};
-    ranked.forEach(doc => {
-      const type = doc.metadata?.type || 'other';
+    ranked.forEach((doc) => {
+      const type = doc.metadata?.type || "other";
       if (!groupedResults[type]) {
         groupedResults[type] = [];
       }
       groupedResults[type].push(doc);
     });
 
-    console.log('📊 Typy dokumentów:', Object.keys(groupedResults).map(type => `${type}(${groupedResults[type].length})`).join(', '));
+    console.log(
+      "📊 Typy dokumentów:",
+      Object.keys(groupedResults)
+        .map((type) => `${type}(${groupedResults[type].length})`)
+        .join(", ")
+    );
 
     const contextParts = [];
-    
+
     // Sprawdź czy są produkty niedostępne i znajdź alternatywy
-    const unavailableProducts = ranked.filter(doc => {
-      const isProduct = doc.metadata?.type === 'product';
-      const isUnavailable = doc.metadata?.availability && 
-        (doc.metadata.availability.toLowerCase().includes('niedostępny') ||
-         doc.metadata.availability.toLowerCase().includes('brak'));
+    const unavailableProducts = ranked.filter((doc) => {
+      const isProduct = doc.metadata?.type === "product";
+      const isUnavailable =
+        doc.metadata?.availability &&
+        (doc.metadata.availability.toLowerCase().includes("niedostępny") ||
+          doc.metadata.availability.toLowerCase().includes("brak"));
       return isProduct && isUnavailable;
     });
-    
-    if (unavailableProducts.length > 0) {
-      console.log(`🔄 Znaleziono ${unavailableProducts.length} niedostępnych produktów, szukam alternatyw...`);
-      
-      for (const unavailableProduct of unavailableProducts.slice(0, 2)) { // Max 2 niedostępne produkty
-        // Znajdź podobne dostępne produkty
-        const alternatives = docs.filter(doc => {
-          const isProduct = doc.metadata?.type === 'product';
-          const isAvailable = !doc.metadata?.availability || 
-            (!doc.metadata.availability.toLowerCase().includes('niedostępny') &&
-             !doc.metadata.availability.toLowerCase().includes('brak'));
-          const isDifferent = doc.metadata?.url !== unavailableProduct.metadata?.url;
-          
-          return isProduct && isAvailable && isDifferent;
-        })
-        .map(doc => ({
-          ...doc,
-          score: cosineSimilarity(unavailableProduct.embedding, doc.embedding)
-        }))
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
 
-      if (alternatives.length > 0) {
-        console.log(`✅ Znaleziono ${alternatives.length} alternatyw dla niedostępnego produktu`);
-        
-        // Dodaj alternatywy do kontekstu
-        contextParts.push("🔄 ALTERNATYWY DLA NIEDOSTĘPNYCH PRODUKTÓW:");
-        alternatives.forEach((alt, index) => {
-          let limitedText = alt.text.length > 400 ? alt.text.substring(0, 400) + "..." : alt.text;
-          contextParts.push(`Alternatywa ${index + 1}: ${limitedText}`);
-        });
+    if (unavailableProducts.length > 0) {
+      console.log(
+        `🔄 Znaleziono ${unavailableProducts.length} niedostępnych produktów, szukam alternatyw...`
+      );
+
+      for (const unavailableProduct of unavailableProducts.slice(0, 2)) {
+        // Max 2 niedostępne produkty
+        // Znajdź podobne dostępne produkty
+        const alternatives = docs
+          .filter((doc) => {
+            const isProduct = doc.metadata?.type === "product";
+            const isAvailable =
+              !doc.metadata?.availability ||
+              (!doc.metadata.availability
+                .toLowerCase()
+                .includes("niedostępny") &&
+                !doc.metadata.availability.toLowerCase().includes("brak"));
+            const isDifferent =
+              doc.metadata?.url !== unavailableProduct.metadata?.url;
+
+            return isProduct && isAvailable && isDifferent;
+          })
+          .map((doc) => ({
+            ...doc,
+            score: cosineSimilarity(
+              unavailableProduct.embedding,
+              doc.embedding
+            ),
+          }))
+          .sort((a, b) => b.score - a.score)
+          .slice(0, 3);
+
+        if (alternatives.length > 0) {
+          console.log(
+            `✅ Znaleziono ${alternatives.length} alternatyw dla niedostępnego produktu`
+          );
+
+          // Dodaj alternatywy do kontekstu
+          contextParts.push("🔄 ALTERNATYWY DLA NIEDOSTĘPNYCH PRODUKTÓW:");
+          alternatives.forEach((alt, index) => {
+            let limitedText =
+              alt.text.length > 400
+                ? alt.text.substring(0, 400) + "..."
+                : alt.text;
+            contextParts.push(`Alternatywa ${index + 1}: ${limitedText}`);
+          });
+        }
       }
     }
-  }
 
     for (const [type, docs] of Object.entries(groupedResults)) {
       let sectionHeader = "";
@@ -306,7 +354,8 @@ app.post("/api/chat", async (req, res) => {
 
       docs.forEach((d, index) => {
         // Ograniczamy długość tekstu do 800 znaków na dokument
-        let limitedText = d.text.length > 800 ? d.text.substring(0, 800) + "..." : d.text;
+        let limitedText =
+          d.text.length > 800 ? d.text.substring(0, 800) + "..." : d.text;
         let docInfo = `${limitedText}`;
 
         // Dodaj metadane jeśli dostępne (w skróconej formie)
@@ -316,12 +365,17 @@ app.post("/api/chat", async (req, res) => {
           if (d.metadata.availability)
             docInfo += `\nDostępność: ${d.metadata.availability}`;
           if (d.metadata.colors && d.metadata.colors.length > 0)
-            docInfo += `\nKolory: ${d.metadata.colors.slice(0, 3).join(", ")}${d.metadata.colors.length > 3 ? "..." : ""}`;
-          if (d.metadata.frameSize) docInfo += `\nRozmiar ramy: ${d.metadata.frameSize}`;
+            docInfo += `\nKolory: ${d.metadata.colors.slice(0, 3).join(", ")}${
+              d.metadata.colors.length > 3 ? "..." : ""
+            }`;
+          if (d.metadata.frameSize)
+            docInfo += `\nRozmiar ramy: ${d.metadata.frameSize}`;
           if (d.metadata.bikeType) docInfo += `\nTyp: ${d.metadata.bikeType}`;
           if (d.metadata.specifications) {
-            const specs = Object.entries(d.metadata.specifications).slice(0, 3)
-              .map(([k, v]) => `${k}: ${v}`).join(", ");
+            const specs = Object.entries(d.metadata.specifications)
+              .slice(0, 3)
+              .map(([k, v]) => `${k}: ${v}`)
+              .join(", ");
             if (specs) docInfo += `\nSpec: ${specs}`;
           }
           if (d.metadata.url) docInfo += `\nURL: ${d.metadata.url}`;
@@ -334,12 +388,18 @@ app.post("/api/chat", async (req, res) => {
     }
 
     let context = contextParts.join("\n");
-    
+
     // Kontrola długości kontekstu - maksymalnie 80,000 znaków (~60k tokenów)
     const MAX_CONTEXT_LENGTH = 80000;
     if (context.length > MAX_CONTEXT_LENGTH) {
-      context = context.substring(0, MAX_CONTEXT_LENGTH) + "\n\n[Kontekst skrócony z powodu limitu długości]";
-      console.log(`⚠️ Kontekst skrócony z ${contextParts.join("\n").length} do ${context.length} znaków`);
+      context =
+        context.substring(0, MAX_CONTEXT_LENGTH) +
+        "\n\n[Kontekst skrócony z powodu limitu długości]";
+      console.log(
+        `⚠️ Kontekst skrócony z ${contextParts.join("\n").length} do ${
+          context.length
+        } znaków`
+      );
     }
 
     console.log(
@@ -456,10 +516,16 @@ WAŻNE:
             role: "user",
             content: `Kontekst ze sklepu:\n${context}
 
-${conversationHistory.length > 0 ? `Historia konwersacji:
-${conversationHistory.map((item, index) => 
-  `${index + 1}. Klient: ${item.user}\n   Bot: ${item.bot}`
-).join('\n')}\n` : ''}
+${
+  conversationHistory.length > 0
+    ? `Historia konwersacji:
+${conversationHistory
+  .map(
+    (item, index) => `${index + 1}. Klient: ${item.user}\n   Bot: ${item.bot}`
+  )
+  .join("\n")}\n`
+    : ""
+}
 Aktualne pytanie klienta: ${message}`,
           },
         ],
@@ -480,7 +546,11 @@ Aktualne pytanie klienta: ${message}`,
 
     // Zapisz do pamięci sesji
     addToSession(currentSessionId, message, reply);
-    console.log(`💾 Zapisano do sesji ${currentSessionId} (historia: ${conversationHistory.length + 1} wymian)`);
+    console.log(
+      `💾 Zapisano do sesji ${currentSessionId} (historia: ${
+        conversationHistory.length + 1
+      } wymian)`
+    );
 
     res.json({
       response: reply,

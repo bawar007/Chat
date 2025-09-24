@@ -434,33 +434,37 @@ function parseProductData($, url) {
 
   // Najpierw sprawdź JSON-LD schema.org dla dostępności
   const jsonLdScripts = $('script[type="application/ld+json"]');
-  jsonLdScripts.each(function() {
+  jsonLdScripts.each(function () {
     try {
       const data = JSON.parse($(this).html());
-      if (data['@graph']) {
-        for (const item of data['@graph']) {
-          if (item['@type'] === 'Product' && item.offers) {
+      if (data["@graph"]) {
+        for (const item of data["@graph"]) {
+          if (item["@type"] === "Product" && item.offers) {
             if (Array.isArray(item.offers)) {
               for (const offer of item.offers) {
                 if (offer.availability) {
                   const avail = offer.availability;
-                  if (avail.includes('InStock')) {
-                    product.availability = 'dostępny';
-                  } else if (avail.includes('OutOfStock')) {
-                    product.availability = 'niedostępny';
+                  if (avail.includes("InStock")) {
+                    product.availability = "dostępny";
+                  } else if (avail.includes("OutOfStock")) {
+                    product.availability = "niedostępny";
                   }
-                  console.log(`   📦 Dostępność (JSON-LD): "${product.availability}" z ${avail}`);
+                  console.log(
+                    `   📦 Dostępność (JSON-LD): "${product.availability}" z ${avail}`
+                  );
                   return false; // break z each
                 }
               }
             } else if (item.offers.availability) {
               const avail = item.offers.availability;
-              if (avail.includes('InStock')) {
-                product.availability = 'dostępny';
-              } else if (avail.includes('OutOfStock')) {
-                product.availability = 'niedostępny';
+              if (avail.includes("InStock")) {
+                product.availability = "dostępny";
+              } else if (avail.includes("OutOfStock")) {
+                product.availability = "niedostępny";
               }
-              console.log(`   📦 Dostępność (JSON-LD single): "${product.availability}" z ${avail}`);
+              console.log(
+                `   📦 Dostępność (JSON-LD single): "${product.availability}" z ${avail}`
+              );
               return false; // break z each
             }
           }
