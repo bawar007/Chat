@@ -1,175 +1,82 @@
 {
-  "name": "Chatbot Tabou",
+  "name": "Excel to API",
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "POST",
-        "path": "chat",
+        "event": "file.changed",
+        "fileId": "<TWOJE_FILE_ID>",
         "options": {}
       },
-      "name": "Webhook",
-      "type": "n8n-nodes-base.webhook",
+      "name": "Google Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
       "typeVersion": 1,
-      "position": [200, 300],
-      "webhookId": "chat-tabou"
+      "position": [250, 300]
     },
     {
       "parameters": {
-        "filePath": "data/tabou.json",
+        "fileId": "={{$node[\"Google Drive Trigger\"].json[\"id\"]}}"
+      },
+      "name": "Download File",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 1,
+      "position": [500, 300],
+      "credentials": {
+        "googleDriveOAuth2Api": "<TWOJE_GOOGLE_CREDENTIALS>"
+      }
+    },
+    {
+      "parameters": {
+        "binaryPropertyName": "data",
         "options": {}
       },
-      "name": "Read Tabou Data",
-      "type": "n8n-nodes-base.readBinaryFile",
+      "name": "Read Spreadsheet File",
+      "type": "n8n-nodes-base.readSpreadsheetFile",
       "typeVersion": 1,
-      "position": [400, 180]
+      "position": [750, 300]
     },
     {
       "parameters": {
-        "options": {}
+        "url": "<TWOJE_API_ENDPOINT>",
+        "method": "POST",
+        "jsonParameters": true,
+        "options": {},
+        "bodyParametersJson": "={{$node[\"Read Spreadsheet File\"].json}}",
+        "headerParametersJson": "{\"Authorization\": \"Bearer <TWÓJ_TOKEN>\"}"
       },
-      "name": "Binary to JSON",
-      "type": "n8n-nodes-base.moveBinaryData",
+      "name": "HTTP Request - send JSON",
+      "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 1,
-      "position": [600, 180]
-    },
-    {
-      "parameters": {
-        "operation": "chat",
-        "model": "text-embedding-3-small",
-        "text": "={{$json[\"body\"][\"message\"]}}"
-      },
-      "name": "OpenAI Embedding",
-      "type": "n8n-nodes-base.openAi",
-      "typeVersion": 1,
-      "position": [400, 420]
-    },
-    {
-      "parameters": {
-        "functionCode": "const query = items[0].json.data[0].embedding;\nconst docs = JSON.parse(items[1].binary.data.toString());\n\nfunction cosineSimilarity(a, b) {\n  let dot = 0, normA = 0, normB = 0;\n  for (let i = 0; i < a.length; i++) {\n    dot += a[i] * b[i];\n    normA += a[i] * a[i];\n    normB += b[i] * b[i];\n  }\n  return dot / (Math.sqrt(normA) * Math.sqrt(normB));\n}\n\nconst ranked = docs\n  .map(d => ({...d, score: cosineSimilarity(query, d.embedding)}))\n  .sort((a,b) => b.score - a.score)\n  .slice(0,5);\n\nreturn ranked.map(r => ({json: r}));"
-      },
-      "name": "Rank Products",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [600, 420]
-    },
-    {
-      "parameters": {
-        "functionCode": "let context = \"Znalezione produkty:\\n\\n\";\nfor (const item of items) {\n  const p = item.json.metadata;\n  context += `- ${p.name || \"Produkt\"}, cena: ${p.price || \"brak\"}, dostępność: ${p.availability || \"?\"}\\n${p.url || \"\"}\\n\\n`;\n}\nreturn [{ json: { context } }];"
-      },
-      "name": "Build Context",
-      "type": "n8n-nodes-base.function",
-      "typeVersion": 1,
-      "position": [800, 420]
-    },
-    {
-      "parameters": {
-        "operation": "chat",
-        "model": "gpt-4o-mini",
-        "messages": [
-          {
-            "role": "system",
-            "content": "Jesteś profesjonalnym asystentem sklepu rowerowego Tabou. Odpowiadaj tylko na podstawie kontekstu. Podawaj nazwę, cenę, dostępność, kolory i link do produktu. Jeśli brak danych – powiedz to wprost. Używaj HTML do formatowania list produktów."
-          },
-          {
-            "role": "user",
-            "content": "Kontekst:\n{{$json[\"context\"]}}\n\nPytanie klienta: {{$json[\"body\"][\"message\"]}}"
-          }
-        ],
-        "temperature": 0.6
-      },
-      "name": "OpenAI Chat",
-      "type": "n8n-nodes-base.openAi",
-      "typeVersion": 1,
-      "position": [1000, 420]
-    },
-    {
-      "parameters": {
-        "responseMode": "lastNode",
-        "options": {}
-      },
-      "name": "Webhook Response",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
-      "position": [1200, 420]
+      "position": [1000, 300]
     }
   ],
   "connections": {
-    "Webhook": {
+    "Google Drive Trigger": {
       "main": [
         [
           {
-            "node": "OpenAI Embedding",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Read Tabou Data",
+            "node": "Download File",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Read Tabou Data": {
+    "Download File": {
       "main": [
         [
           {
-            "node": "Binary to JSON",
+            "node": "Read Spreadsheet File",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "OpenAI Embedding": {
+    "Read Spreadsheet File": {
       "main": [
         [
           {
-            "node": "Rank Products",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Binary to JSON": {
-      "main": [
-        [
-          {
-            "node": "Rank Products",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
-    "Rank Products": {
-      "main": [
-        [
-          {
-            "node": "Build Context",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Build Context": {
-      "main": [
-        [
-          {
-            "node": "OpenAI Chat",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "OpenAI Chat": {
-      "main": [
-        [
-          {
-            "node": "Webhook Response",
+            "node": "HTTP Request - send JSON",
             "type": "main",
             "index": 0
           }

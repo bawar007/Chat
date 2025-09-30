@@ -47,9 +47,47 @@
         color: #333;
       }
       .bot {
-        background: #0077cc;
-        color: white;
+        background: #ffffff;
+        color: #333;
         align-self: flex-end;
+        border: 1px solid #e6e6e6;
+      }
+      /* Lepsze formatowanie treści HTML od bota */
+      .message.bot h1,
+      .message.bot h2,
+      .message.bot h3 {
+        margin: 6px 0 4px;
+        color: #222;
+      }
+      .message.bot ul,
+      .message.bot ol {
+        margin: 6px 0;
+        padding-left: 18px;
+      }
+      .message.bot li {
+        margin: 2px 0;
+      }
+      .message.bot a {
+        color: #0066cc;
+        text-decoration: none;
+      }
+      .message.bot a:hover {
+        text-decoration: underline;
+      }
+      .message.bot table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 8px 0;
+        font-size: 13px;
+      }
+      .message.bot th,
+      .message.bot td {
+        border: 1px solid #e6e6e6;
+        padding: 6px 8px;
+        text-align: left;
+      }
+      .message.bot tr:nth-child(even) {
+        background: #fafafa;
       }
       #chat-input {
         display: flex;
@@ -156,6 +194,44 @@
         }
       }
     </style>
+    <link
+      href="https://cdn.jsdelivr.net/npm/@n8n/chat/dist/style.css"
+      rel="stylesheet"
+    />
+    <script type="module">
+      import { createChat } from "https://cdn.jsdelivr.net/npm/@n8n/chat/dist/chat.bundle.es.js";
+
+      createChat({
+        webhookUrl:
+          "https://kamilb.app.n8n.cloud/webhook/6d6f7ed6-6e5f-4590-87c6-4b61f0f8d529/chat",
+        webhookConfig: {
+          method: "POST",
+          headers: {},
+        },
+        target: "#n8n-chat",
+        mode: "window",
+        chatInputKey: "chatInput",
+        chatSessionKey: "sessionId",
+        loadPreviousSession: true,
+        metadata: {},
+        showWelcomeScreen: false,
+        defaultLanguage: "en",
+        initialMessages: [
+          "Hi there! 👋",
+          "My name is Nathan. How can I assist you today?",
+        ],
+        i18n: {
+          en: {
+            title: "Hi there! 👋",
+            subtitle: "Start a chat. We're here to help you 24/7.",
+            footer: "",
+            getStarted: "New Conversation",
+            inputPlaceholder: "Type your question..",
+          },
+        },
+        enableStreaming: false,
+      });
+    </script>
   </head>
   <body>
     <div id="chat-container">
@@ -217,6 +293,73 @@
         }
       }
 
+      // Prosty konwerter Markdown -> HTML dla najczęstszych przypadków
+      function markdownToHtml(md) {
+        // Jeśli już wygląda jak HTML (np. zawiera <ul>, <h3>), nie konwertuj
+        if (/<\/?[a-z][\s\S]*>/i.test(md)) return md;
+
+        const lines = md.split(/\r?\n/);
+        let html = "";
+        let inList = false;
+        let listBuf = [];
+        const flushList = () => {
+          if (inList && listBuf.length) {
+            html +=
+              "<ul>" + listBuf.map((li) => `<li>${li}</li>`).join("") + "</ul>";
+            inList = false;
+            listBuf = [];
+          }
+        };
+        for (let raw of lines) {
+          const line = raw.trim();
+          if (!line) {
+            flushList();
+            continue;
+          }
+          // nagłówki
+          if (line.startsWith("### ")) {
+            flushList();
+            html += `<h3>${line.slice(4)}</h3>`;
+            continue;
+          }
+          if (line.startsWith("## ")) {
+            flushList();
+            html += `<h2>${line.slice(3)}</h2>`;
+            continue;
+          }
+          if (line.startsWith("# ")) {
+            flushList();
+            html += `<h1>${line.slice(2)}</h1>`;
+            continue;
+          }
+          // listy
+          if (line.startsWith("- ") || line.startsWith("* ")) {
+            inList = true;
+            let item = line.replace(/^[-*]\s+/, "");
+            // Linki markdown [txt](url)
+            item = item.replace(
+              /\[([^\]]+)\]\(([^)]+)\)/g,
+              '<a href="$2" target="_blank" rel="noopener noreferrer">$1<\/a>'
+            );
+            // Pogrubienie **tekst**
+            item = item.replace(/\*\*([^*]+)\*\*/g, "<strong>$1<\/strong>");
+            listBuf.push(item);
+            continue;
+          }
+          // zwykły akapit + proste linki
+          let p = line
+            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1<\/strong>")
+            .replace(
+              /\[([^\]]+)\]\(([^)]+)\)/g,
+              '<a href="$2" target="_blank" rel="noopener noreferrer">$1<\/a>'
+            );
+          flushList();
+          html += `<p>${p}</p>`;
+        }
+        flushList();
+        return html || md;
+      }
+
       async function sendMessage(msg) {
         // Blokuj interfejs podczas oczekiwania
         inputEl.disabled = true;
@@ -232,7 +375,7 @@
         const typingIndicator = showTypingIndicator();
 
         try {
-          const res = await fetch("http://localhost:3000/api/chat", {
+          const res = await fetch("http://127.0.0.1:3000/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ message: msg, sessionId: sessionId }),
@@ -242,7 +385,26 @@
           // Usuń animację kropeczek
           removeTypingIndicator(typingIndicator);
 
-          addMessage(data.response, "bot");
+          // Proste oczyszczenie odpowiedzi – usuwamy potencjalne inline script / on*
+          let safe = data.response || "";
+          // Spróbuj przekonwertować Markdown na HTML jeśli model zwrócił Markdown
+          safe = markdownToHtml(safe);
+          // Usuń tagi script
+          safe = safe.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+          // Usuń atrybuty on*
+          safe = safe.replace(/ on[a-zA-Z]+="[^"]*"/g, "");
+          // Wymuś target i rel dla wszystkich linków
+          // 1) linki bez target
+          safe = safe.replace(
+            /<a(?![^>]*target=)([^>]+)>/gi,
+            '<a$1 target="_blank" rel="noopener noreferrer">'
+          );
+          // 2) linki z target bez rel
+          safe = safe.replace(
+            /<a([^>]*target=["']?_blank["']?)(?![^>]*rel=)([^>]*)>/gi,
+            '<a$1$2 rel="noopener noreferrer">'
+          );
+          addMessage(safe, "bot");
         } catch (error) {
           // Usuń animację kropeczek w przypadku błędu
           removeTypingIndicator(typingIndicator);

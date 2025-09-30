@@ -15,15 +15,21 @@ if (!OPENAI_API_KEY) {
 
 // Konfiguracja crawlera
 const CRAWLER_CONFIG = {
-  maxDepth: 4, // Zwiększona głębokość dla pełnego pokrycia
-  maxPages: 200, // Zwiększona liczba dla wszystkich produktów
+  maxDepth: process.argv.includes("--test-mode") ? 2 : 4, // Zmniejszona głębokość dla testów
+  maxPages: process.argv.includes("--test-mode") ? 20 : 200, // Mniej stron dla testów
   delay: 500, // Optymalne opóźnienie
+  // Nowe ustawienia stabilności i wydajności
+  requestTimeoutMs: 15000, // timeout dla stron kategorii/ogólnych
+  productRequestTimeoutMs: 25000, // timeout dla stron produktów
+  concurrency: {
+    productDetails: 4, // ile równolegle pobierać stron produktów z listingu
+  },
+  maxProductsPerCategory: 120, // twardy limit produktów do zagr. dla jednej kategorii (agregacja paginacji)
   baseUrl: "https://www.tabou.pl",
   allowedPaths: [
-    "/produkt/",
-    "/rowery/", // Główne kategorie rowerów
+    // Usuwamy bezpośrednie odwiedzanie /produkt/ aby produkty były tylko w kategoriach
     "/sklepy/", // Strona sklepu - ujednolicone z startUrls
-    "/e-bike/",
+    "/e-ebike/",
     "/gravel/",
     "/mtb/",
     "/mtb-trail/",
@@ -173,6 +179,8 @@ const discoveredProductUrls = new Set(); // Unikalne URL-e produktów
 const discoveredCategoryUrls = new Set(); // Unikalne URL-e kategorii
 const processedEmbeddings = new Set(); // Unikalne embeddingi (hash z contentu)
 const globalProductLinks = new Set(); // Globalne unikalne linki produktów
+// Kategorie, dla których wykonano już pełną agregację paginacji (aby pominąć późniejsze /page/N/)
+const aggregatedCategories = new Set();
 
 // Funkcja normalizacji URL
 function normalizeUrl(url, baseUrl) {
@@ -310,7 +318,21 @@ function isUrlRelevant(url) {
 
 // Funkcja wykrywania typu strony
 function detectPageType(url, $) {
-  if (url.includes("/produkt/")) return "product";
+  // Wymuś traktowanie strony głównej jako kategorii "general" (spójność z docelowym formatem)
+  if (url === CRAWLER_CONFIG.baseUrl || url === CRAWLER_CONFIG.baseUrl + "/") {
+    return "category";
+  }
+
+  if (url.includes("/produkt/")) return "product"; // (pozostaje dla bezpieczeństwa jeśli jednak odwiedzimy produkt)
+
+  // Rozpoznaj strony paginacji kategorii
+  if (
+    url.includes("/rowery/") &&
+    (/\/page\/\d+/i.test(url) || /[&?]paged?=\d+/i.test(url))
+  ) {
+    return "category-page";
+  }
+
   if (url.includes("/rowery/")) return "category";
   if (url.includes("/sklepy/")) return "shops";
 
@@ -889,8 +911,82 @@ function parseProductData($, url) {
   return product;
 }
 
+// Funkcja scrapowania pełnych danych produktu z listingu kategorii (bez dodatkowego zapytania HTTP)
+async function scrapProductDataFromListing(
+  $,
+  productElement,
+  productUrl,
+  categoryType
+) {
+  const $product = $(productElement);
+
+  // Pobierz pełne dane produktu wykonując zapytanie HTTP
+  try {
+    const productResponse = await httpGet(productUrl, {
+      timeout: CRAWLER_CONFIG.productRequestTimeoutMs,
+      retries: 2,
+    });
+    const $productPage = cheerio.load(productResponse.data);
+
+    // Użyj istniejącej funkcji parseProductData do otrzymania pełnych danych
+    const fullProductData = parseProductData($productPage, productUrl);
+
+    // Dodaj categoryType
+    fullProductData.categoryType = categoryType;
+
+    return fullProductData;
+  } catch (error) {
+    console.warn(
+      `⚠️  [SCRAPING] Nie można pobrać pełnych danych produktu ${productUrl}:`,
+      error.message
+    );
+
+    // Fallback - zwróć podstawowe dane z listingu
+    let productPrice = "";
+    const nearbyText = $product.closest("div").text();
+    const priceMatch = nearbyText.match(/(\d{3,})\s*zł/);
+    if (priceMatch) {
+      productPrice = priceMatch[0];
+    }
+
+    return {
+      name: $product.attr("title") || $product.text().trim(),
+      price: productPrice,
+      url: productUrl,
+      categoryType: categoryType,
+      type: "product",
+      availability: "",
+      description: "",
+      specifications: {},
+      scrapedAt: new Date().toISOString(),
+    };
+  }
+}
+
+// Funkcja pomocnicza do znajdowania lub tworzenia kategorii głównej
+function findOrCreateCategory(paginationUrl) {
+  // Wyciągnij główny URL kategorii z URL paginacji
+  let baseUrl = paginationUrl
+    .replace(/\/page\/\d+\/?/i, "")
+    .replace(/[&?]paged?=\d+/i, "");
+
+  // Normalizuj URL - usuń slash na końcu dla porównania
+  const normalizedBaseUrl = baseUrl.replace(/\/$/, "");
+
+  // Znajdź istniejącą kategorię z tym bazowym URL (z lub bez slasha)
+  const existingCategory = scrapedData.find(
+    (item) =>
+      item.type === "category" &&
+      (item.url === baseUrl ||
+        item.url === normalizedBaseUrl ||
+        item.url === normalizedBaseUrl + "/")
+  );
+
+  return { baseUrl: normalizedBaseUrl + "/", existingCategory };
+}
+
 // Funkcja parsowania kategorii
-function parseCategoryData($, url) {
+async function parseCategoryData($, url) {
   const category = {
     url,
     type: "category",
@@ -899,6 +995,36 @@ function parseCategoryData($, url) {
     products: [],
     subcategories: [],
   };
+
+  // Określ kategorię na podstawie URL
+  let categoryType = "general";
+  if (url.includes("/rowery/mtb-trail")) {
+    categoryType = "mtb-trail";
+  } else if (url.includes("/rowery/mtb")) {
+    categoryType = "mtb";
+  } else if (url.includes("/rowery/szosowe")) {
+    categoryType = "szosowe";
+  } else if (
+    url.includes("/rowery/trekkingowe") ||
+    url.includes("/rowery/trekking")
+  ) {
+    categoryType = "trekking";
+  } else if (
+    url.includes("/rowery/skladane") ||
+    url.includes("/rowery/sk%c5%82adane")
+  ) {
+    categoryType = "składane";
+  } else if (url.includes("/rowery/elektryczne")) {
+    categoryType = "elektryczne";
+  } else if (url.includes("/rowery/")) {
+    // Próbuj wyciągnąć kategorię z URL
+    const pathMatch = url.match(/\/rowery\/([^\/\?]+)/);
+    if (pathMatch) {
+      categoryType = pathMatch[1].replace(/-/g, " ");
+    } else {
+      categoryType = "rowery";
+    }
+  }
 
   // Nazwa kategorii - rozszerzone selektory dla WooCommerce/Tabou
   const categoryNameSelectors = [
@@ -916,6 +1042,15 @@ function parseCategoryData($, url) {
     }
   }
 
+  // Jeśli nie znaleziono nazwy, użyj categoryType
+  if (!category.name) {
+    category.name =
+      categoryType.charAt(0).toUpperCase() + categoryType.slice(1);
+  }
+
+  // Dodaj pole categoryType
+  category.categoryType = categoryType;
+
   // Opis kategorii - rozszerzone selektory dla WooCommerce/Tabou
   const categoryDescSelectors = [
     ".woocommerce-products-header .term-description",
@@ -932,7 +1067,9 @@ function parseCategoryData($, url) {
     }
   }
 
-  // Produkty w kategorii - dostosowane do struktury Tabou.pl (zoptymalizowane na podstawie analizy HTML)
+  // OPTYMALIZACJA: Na stronach /rowery/ zbieramy tylko linki do produktów (nie pełne dane)
+  const isRoweryCategory = url.includes("/rowery/");
+
   const productSelectors = [
     ".woocommerce-LoopProduct-link", // Główny selektor Tabou.pl (48 elementów w MTB)
     'a[href*="/produkt/"]', // Linki prowadzące do produktów
@@ -945,11 +1082,30 @@ function parseCategoryData($, url) {
   let foundProducts = 0;
   let foundProductLinks = new Set();
 
+  // Zbierz wszystkie produkty do przetworzenia
+  const productsToProcess = [];
+
   productSelectors.forEach((selector) => {
     $(selector).each((i, el) => {
       const $el = $(el);
       const productLink = $el.attr("href");
+
+      // Pomiń "Dodaj do porównania" linki
+      if (
+        productLink &&
+        (productLink.includes("yith-woocompare") ||
+          $el.text().trim() === "Dodaj do porównania")
+      ) {
+        return; // skip this iteration
+      }
+
       let productName = $el.attr("title") || $el.text().trim();
+
+      // Pomiń jeśli nazwa to "Dodaj do porównania"
+      if (productName === "Dodaj do porównania") {
+        return; // skip this iteration
+      }
+
       if (!productName) {
         productName = $el
           .closest("div")
@@ -964,30 +1120,191 @@ function parseCategoryData($, url) {
           .text()
           .trim();
       }
-      let productPrice = "";
-      const nearbyText = $el.closest("div").text();
-      const priceMatch = nearbyText.match(/(\d{3,})\s*zł/);
-      if (priceMatch) {
-        productPrice = priceMatch[0];
-      }
-      if (productLink && productName) {
+
+      if (productLink && productName && productName !== "Dodaj do porównania") {
         const normalizedLink = normalizeUrl(productLink, url);
-        if (normalizedLink) {
+        if (normalizedLink && !foundProductLinks.has(normalizedLink)) {
           foundProductLinks.add(normalizedLink);
-          if (!category.products.some((p) => p.url === normalizedLink)) {
-            category.products.push({
-              name: productName,
-              price: productPrice,
-              url: normalizedLink,
-            });
-            foundProducts++;
-          }
+          productsToProcess.push({
+            element: $el,
+            name: productName,
+            url: normalizedLink,
+          });
         }
       }
     });
   });
+
+  // Przetwórz produkty - ale pomiń kategorię "general" aby uniknąć duplikacji
+  if (categoryType !== "general") {
+    const concurrency = Math.max(
+      1,
+      CRAWLER_CONFIG.concurrency?.productDetails || 4
+    );
+    const maxPerCategory = Math.max(
+      1,
+      CRAWLER_CONFIG.maxProductsPerCategory || 120
+    );
+
+    const enqueue = async (batch) => {
+      const tasks = batch.map(async (productInfo) => {
+        if (category.products.length >= maxPerCategory) return null;
+        if (category.products.some((p) => p.url === productInfo.url))
+          return null;
+
+        try {
+          let productData;
+          if (isRoweryCategory) {
+            productData = await scrapProductDataFromListing(
+              $,
+              productInfo.element,
+              productInfo.url,
+              categoryType
+            );
+          } else {
+            // podstawowe dane
+            let productPrice = "";
+            const nearbyText = productInfo.element.closest("div").text();
+            const priceMatch = nearbyText.match(/(\d{3,})\s*zł/);
+            if (priceMatch) productPrice = priceMatch[0];
+            productData = {
+              name: productInfo.name,
+              price: productPrice,
+              url: productInfo.url,
+            };
+          }
+
+          category.products.push(productData);
+          return productData;
+        } catch (e) {
+          console.warn(
+            `⚠️  [PRODUCT] Błąd pobrania ${productInfo.url}: ${e.message}`
+          );
+          return null;
+        }
+      });
+      const results = await Promise.all(tasks);
+      foundProducts += results.filter(Boolean).length;
+    };
+
+    for (let i = 0; i < productsToProcess.length; i += concurrency) {
+      if (category.products.length >= maxPerCategory) {
+        console.log(
+          `⏹️  [LIMIT] Osiągnięto limit ${maxPerCategory} produktów w kategorii.`
+        );
+        break;
+      }
+      const batch = productsToProcess.slice(i, i + concurrency);
+      await enqueue(batch);
+      // krótkie odsapnięcie między batchami
+      await sleep(200, 200);
+    }
+  } else {
+    console.log(
+      `⏭️  [POMINIĘTO] Kategoria "general" - produkty będą pobrane w swoich właściwych kategoriach`
+    );
+  }
+
+  // --- NOWOŚĆ: Agregacja paginacji w ramach jednej wizyty podstawowej strony kategorii ---
+  const isBaseCategoryPage =
+    !/\/page\/\d+\//i.test(url) && categoryType !== "general";
+  if (isBaseCategoryPage) {
+    // Zbierz numery stron paginacji
+    const pageNumbers = new Set();
+    $("a[href]").each((i, el) => {
+      const href = $(el).attr("href");
+      if (href && /\/page\/(\d+)\//i.test(href)) {
+        const m = href.match(/\/page\/(\d+)\//i);
+        if (m) pageNumbers.add(parseInt(m[1], 10));
+      }
+    });
+
+    const maxPage = pageNumbers.size > 0 ? Math.max(...pageNumbers) : 1;
+    if (maxPage > 1) {
+      console.log(
+        `� [PAGINACJA-AGG] Wykryto ${maxPage} stron w kategorii ${url} – agreguję produkty kolejnych stron zanim zapiszę kategorię.`
+      );
+      const baseUrl =
+        url.replace(/\/page\/\d+\//i, "").replace(/\/$/, "") + "/";
+
+      for (let p = 2; p <= maxPage; p++) {
+        if (
+          category.products.length >=
+          (CRAWLER_CONFIG.maxProductsPerCategory || 120)
+        ) {
+          console.log(
+            `⏹️  [LIMIT] Zatrzymuję agregację paginacji – osiągnięto ${category.products.length} produktów.`
+          );
+          break;
+        }
+        const pageUrl = `${baseUrl}page/${p}/`;
+        try {
+          const resp = await httpGet(pageUrl, {
+            timeout: CRAWLER_CONFIG.requestTimeoutMs,
+            retries: 1,
+          });
+          const $p = cheerio.load(resp.data);
+
+          // Wyciągnij produkty z tej strony (kopiujemy logikę z części głównej – bez duplikacji)
+          const pageProductsToProcess = [];
+          productSelectors.forEach((selector) => {
+            $p(selector).each((i, el) => {
+              const $el = $p(el);
+              const productLink = $el.attr("href");
+              if (!productLink) return;
+              if (productLink.includes("yith-woocompare")) return;
+              let productName = $el.attr("title") || $el.text().trim();
+              if (productName === "Dodaj do porównania") return;
+              if (!productName) return;
+              const normalizedLink = normalizeUrl(productLink, pageUrl);
+              if (
+                normalizedLink &&
+                !category.products.some((pr) => pr.url === normalizedLink) &&
+                !pageProductsToProcess.some((pr) => pr.url === normalizedLink)
+              ) {
+                pageProductsToProcess.push({
+                  element: $el,
+                  name: productName,
+                  url: normalizedLink,
+                });
+              }
+            });
+          });
+
+          let addedOnPage = 0;
+          for (const productInfo of pageProductsToProcess) {
+            let productData;
+            // Pełne dane (jak dla stron /rowery/) zachowujemy spójność z bazową logiką
+            productData = await scrapProductDataFromListing(
+              $p,
+              productInfo.element,
+              productInfo.url,
+              categoryType
+            );
+            if (!category.products.some((p) => p.url === productData.url)) {
+              category.products.push(productData);
+              addedOnPage++;
+            }
+          }
+          console.log(
+            `➕ [PAGINACJA-AGG] Strona ${p}/${maxPage}: dodano ${addedOnPage} produktów (łącznie: ${category.products.length})`
+          );
+          // Oznacz stronę jako odwiedzoną aby uniknąć późniejszego wejścia w trybie queue
+          visitedUrls.add(pageUrl);
+          // krótka pauza między stronami paginacji
+          await sleep(200, 300);
+        } catch (e) {
+          console.warn(
+            `⚠️  [PAGINACJA-AGG] Błąd pobierania ${pageUrl}: ${e.message}`
+          );
+        }
+      }
+      aggregatedCategories.add(baseUrl);
+    }
+  }
+
   console.log(
-    `🟢 [KATEGORIA] ${url} | Nazwa: ${
+    `�🟢 [KATEGORIA] ${url} | Typ: ${categoryType} | Nazwa: ${
       category.name
     } | Opis: ${category.description?.slice(0, 60)}... | Liczba produktów: ${
       category.products.length
@@ -1103,13 +1420,16 @@ function discoverLinks($, currentUrl) {
         !discoveredInThisPage.has(normalizedUrl) &&
         !visitedUrls.has(normalizedUrl)
       ) {
+        const isProductLink = normalizedUrl.includes("/produkt/");
+        // Globalnie blokujemy dodawanie /produkt/ do kolejki – dane produktów zbieramy w parseCategoryData → scrapProductDataFromListing
+        if (isProductLink) {
+          return; // skip całkowicie
+        }
+
         links.add(normalizedUrl);
         discoveredInThisPage.add(normalizedUrl);
 
-        // Dodaj do globalnych zbiorów
-        if (normalizedUrl.includes("/produkt/")) {
-          discoveredProductUrls.add(normalizedUrl);
-        } else if (
+        if (
           normalizedUrl.includes("/rowery/") ||
           normalizedUrl.includes("/kategoria/")
         ) {
@@ -1166,7 +1486,13 @@ async function scrapePage(url, depth = 0) {
 
   try {
     await sleep(CRAWLER_CONFIG.delay, 500);
-    const response = await axios.get(url);
+    const isProductUrl = url.includes("/produkt/");
+    const response = await httpGet(url, {
+      timeout: isProductUrl
+        ? CRAWLER_CONFIG.productRequestTimeoutMs
+        : CRAWLER_CONFIG.requestTimeoutMs,
+      retries: isProductUrl ? 2 : 1,
+    });
     const $ = cheerio.load(response.data);
 
     // Wykryj typ strony i parsuj odpowiednio
@@ -1174,11 +1500,108 @@ async function scrapePage(url, depth = 0) {
     let pageData;
 
     switch (pageType) {
-      case "product":
-        pageData = parseProductData($, url);
+      case "product": {
+        // NIE dodajemy top-level produktu. Spróbuj znaleźć kategorię docelową i scalić.
+        const productData = parseProductData($, url);
+
+        // Heurystyka: spróbuj wywnioskować kategorię z breadcrumbu / linków na stronie (pierwszy link zawierający /rowery/xxx/)
+        let inferredCategoryUrl = null;
+        $('a[href*="/rowery/"]').each((i, el) => {
+          if (inferredCategoryUrl) return; // pierwszy pasujący
+          const href = $(el).attr("href");
+          if (/\/rowery\/.+\/$/i.test(href)) {
+            inferredCategoryUrl = normalizeUrl(href, url);
+          }
+        });
+
+        if (inferredCategoryUrl) {
+          const targetCategory = scrapedData.find(
+            (c) =>
+              c.type === "category" &&
+              c.url.replace(/\/$/, "") ===
+                inferredCategoryUrl.replace(/\/$/, "")
+          );
+          if (targetCategory) {
+            const existing = targetCategory.products.find(
+              (p) => p.url === productData.url
+            );
+            if (existing) {
+              // Uzupełnij brakujące pola
+              Object.keys(productData).forEach((k) => {
+                if (productData[k] && !existing[k])
+                  existing[k] = productData[k];
+              });
+            } else {
+              targetCategory.products.push(productData);
+            }
+            console.log(
+              `🔗 [MERGE] Produkt z odwiedzonej strony scalony do kategorii: ${targetCategory.url}`
+            );
+          } else {
+            // Utwórz awaryjną kategorię jeśli brak
+            const fallback = scrapedData.find(
+              (c) => c.type === "category" && c.categoryType === "general"
+            );
+            if (fallback) {
+              fallback.products = fallback.products || [];
+              if (!fallback.products.some((p) => p.url === productData.url)) {
+                fallback.products.push(productData);
+                console.log(
+                  "🆕 [FALLBACK] Produkt dodany do kategorii general"
+                );
+              }
+            } else {
+              console.log(
+                "⚠️  [FALLBACK] Brak kategorii general – produkt pominięty jako top-level"
+              );
+            }
+          }
+        } else {
+          console.log(
+            "⚠️  [SKIP] Produkt odwiedzony bez możliwości przypisania kategorii – pomijam top-level"
+          );
+        }
+        pageData = null; // Nie dodawaj jako osobny obiekt
         break;
+      }
       case "category":
-        pageData = parseCategoryData($, url);
+        pageData = await parseCategoryData($, url);
+        break;
+      case "category-page":
+        // Nowa logika: jeśli kategoria została już w pełni zagregowana, pomiń
+        const { baseUrl, existingCategory } = findOrCreateCategory(url);
+        const normalizedBase = baseUrl.replace(/\/$/, "") + "/";
+        if (aggregatedCategories.has(normalizedBase)) {
+          console.log(
+            `⏭️  [PAGINACJA-SKIP] ${url} pominięta – kategoria już zagregowana (${normalizedBase})`
+          );
+          pageData = null;
+          break;
+        }
+        // Fallback do starej ścieżki jeśli jeszcze nie agregowano (np. główną stronę odwiedzono wcześniej bez agregacji)
+        if (existingCategory) {
+          const paginationProducts = await parseCategoryData($, url);
+          existingCategory.products.push(...paginationProducts.products);
+          const uniqueProducts = [];
+          const seenUrls = new Set();
+          existingCategory.products.forEach((product) => {
+            if (!seenUrls.has(product.url)) {
+              seenUrls.add(product.url);
+              uniqueProducts.push(product);
+            }
+          });
+          existingCategory.products = uniqueProducts;
+          console.log(
+            `📄 [PAGINACJA-MERGE] Scalono ${paginationProducts.products.length} produktów z ${url} (łącznie: ${existingCategory.products.length})`
+          );
+          pageData = null;
+        } else {
+          console.warn(
+            `⚠️ [PAGINACJA-FALLBACK] Brak głównej kategorii dla ${baseUrl} – tworzę nową (bez agregacji).`
+          );
+          pageData = await parseCategoryData($, url);
+          pageData.url = baseUrl;
+        }
         break;
       case "faq":
         pageData = parseFaqData($, url);
@@ -1188,17 +1611,24 @@ async function scrapePage(url, depth = 0) {
         break;
     }
 
-    // Dodaj metadane
-    pageData.scrapedAt = new Date().toISOString();
-    pageData.depth = depth;
-
-    scrapedData.push(pageData);
+    // Dodaj metadane tylko jeśli pageData nie jest null (nie było scalaniem paginacji)
+    if (pageData) {
+      pageData.scrapedAt = new Date().toISOString();
+      pageData.depth = depth;
+      scrapedData.push(pageData);
+    }
 
     // Odkryj nowe linki i dodaj do kolejki
     const newLinks = discoverLinks($, url);
 
     // Dla kategorii, dodaj także linki produktów do kolejki
-    if (pageType === "category" && pageData.products) {
+    // WYŁĄCZONE dla kategorii /rowery/ aby uniknąć duplikacji danych
+    if (
+      (pageType === "category" || pageType === "category-page") &&
+      pageData &&
+      pageData.products &&
+      !url.includes("/rowery/")
+    ) {
       for (const product of pageData.products) {
         if (
           product.url &&
@@ -1228,6 +1658,7 @@ async function scrapePage(url, depth = 0) {
 function prepareTextChunks() {
   const chunks = [];
   const seenHashes = new Set(); // Lokalna deduplicacja w tej funkcji
+  const MAX_CHUNKS_PER_PAGE = 15; // twardy limit chunków na stronę
 
   for (const pageData of scrapedData) {
     let textContent = "";
@@ -1300,15 +1731,42 @@ SKU: ${pageData.sku}`;
         break;
 
       case "faq":
-        textContent = pageData.questions
-          .map((q) => `Q: ${q.question}\nA: ${q.answer}`)
-          .join("\n\n");
+        // Obsłuż zarówno format scraped_data jak i clean-data
+        if (pageData.questions && Array.isArray(pageData.questions)) {
+          // Format scraped_data
+          textContent = pageData.questions
+            .map((q) => `Q: ${q.question}\nA: ${q.answer}`)
+            .join("\n\n");
+        } else {
+          // Format clean-data - użyj content
+          textContent = `${pageData.title || "FAQ"}\n${pageData.content || ""}`;
+        }
         break;
 
       case "category":
         textContent = `Kategoria: ${pageData.name}
-Opis: ${pageData.description}
-Produkty: ${pageData.products.map((p) => `${p.name} - ${p.price}`).join(", ")}`;
+Opis: ${pageData.description || ""}`;
+        // Obsłuż produkty w kategorii
+        if (pageData.products && Array.isArray(pageData.products)) {
+          const productList = pageData.products
+            .slice(0, 10) // Ogranicz do 10 produktów żeby nie przekroczyć limitu
+            .map((p) => `${p.name} - ${p.price || "Brak ceny"}`)
+            .join(", ");
+          textContent += `\nProdukty: ${productList}`;
+          if (pageData.products.length > 10) {
+            textContent += ` ... i ${
+              pageData.products.length - 10
+            } więcej produktów`;
+          }
+        }
+        break;
+
+      case "contact":
+      case "static":
+        textContent = `${pageData.title || ""}\n${pageData.content || ""}`;
+        if (pageData.headings && Array.isArray(pageData.headings)) {
+          textContent += "\n" + pageData.headings.map((h) => h.text).join("\n");
+        }
         break;
 
       default:
@@ -1327,8 +1785,19 @@ Produkty: ${pageData.products.map((p) => `${p.name} - ${p.price}`).join(", ")}`;
     }
     processedEmbeddings.add(contentHash);
 
-    // Dziel na chunki po 1000 znaków - tylko unikalne
-    for (let i = 0; i < textContent.length; i += 1000) {
+    // Normalizacja whitespace i redukcja boilerplate
+    textContent = (textContent || "")
+      .replace(/\s+/g, " ")
+      .replace(/\u00A0/g, " ")
+      .trim();
+
+    // Dziel na chunki po 1000 znaków - tylko unikalne, z twardym limitem
+    let chunksForThisPage = 0;
+    for (
+      let i = 0;
+      i < textContent.length && chunksForThisPage < MAX_CHUNKS_PER_PAGE;
+      i += 1000
+    ) {
       const chunkText = textContent.slice(i, i + 1000);
       const chunkHash = hashContent(chunkText);
 
@@ -1338,6 +1807,7 @@ Produkty: ${pageData.products.map((p) => `${p.name} - ${p.price}`).join(", ")}`;
           text: chunkText,
           metadata: { ...metadata, chunkIndex: Math.floor(i / 1000) },
         });
+        chunksForThisPage++;
       }
     }
   }
@@ -1396,6 +1866,22 @@ function sleep(ms, jitter = 0) {
   return new Promise((resolve) => setTimeout(resolve, delay));
 }
 
+// Prosty wrapper do axios.get z timeoutem i retry (1-2 próby)
+async function httpGet(url, { timeout = 15000, retries = 1 } = {}) {
+  try {
+    return await axios.get(url, { timeout });
+  } catch (err) {
+    if (retries > 0) {
+      console.warn(
+        `⚠️  GET retry for ${url} (${retries} left): ${err.message}`
+      );
+      await sleep(1000, 1000);
+      return httpGet(url, { timeout, retries: retries - 1 });
+    }
+    throw err;
+  }
+}
+
 // Funkcja tworzenia embeddingu z retry
 async function getEmbedding(text, retries = 10) {
   try {
@@ -1450,6 +1936,8 @@ async function crawl(startUrl = CRAWLER_CONFIG.baseUrl) {
         "Pokaż konfigurację crawlera",
         "Zmień konfigurację (maxPages/maxDepth)",
         "Rozpocznij embedding z zapisanego pliku scraped_data",
+        "Rozpocznij embedding z pliku clean-data.json",
+        "Prześlij embeddingi do Pinecone (z clean-data.json)",
       ]
     );
 
@@ -1555,6 +2043,179 @@ async function crawl(startUrl = CRAWLER_CONFIG.baseUrl) {
         continue;
       }
     }
+
+    if (choice1 === "5") {
+      // Wczytaj clean-data.json i przekształć na format scrapedData
+      try {
+        if (!fs.existsSync("data/clean-data.json")) {
+          console.log(
+            "❌ Plik data/clean-data.json nie istnieje. Najpierw uruchom parse-clean-data.js"
+          );
+          continue;
+        }
+
+        const cleanData = JSON.parse(
+          fs.readFileSync("data/clean-data.json", "utf8")
+        );
+        console.log(
+          `📁 Wczytano clean-data.json z ${cleanData.products.length} produktami i ${cleanData.categories.length} kategoriami`
+        );
+
+        // Przekształć clean-data na format scrapedData
+        scrapedData.length = 0; // Wyczyść tablicę
+
+        // Dodaj produkty
+        for (const product of cleanData.products) {
+          scrapedData.push({
+            url: product.url,
+            type: "product",
+            name: product.name,
+            title: product.name,
+            price: product.price,
+            availability: product.availability,
+            description: product.description,
+            specifications: product.specifications,
+            colors: product.colors,
+            brand: product.brand,
+            sku: product.id,
+            depth: 1,
+            category: product.parentCategory?.name || "Unknown",
+          });
+        }
+
+        // Dodaj kategorię jako podsumowania (opcjonalnie)
+        for (const category of cleanData.categories) {
+          scrapedData.push({
+            url: category.url,
+            type: "category",
+            name: category.name,
+            title: category.name,
+            description: category.description,
+            products: category.products,
+            depth: 1,
+          });
+        }
+
+        // Dodaj strony statyczne
+        for (const page of cleanData.static_pages) {
+          scrapedData.push({
+            url: page.url,
+            type: "static",
+            title: page.title,
+            content: page.content,
+            depth: 1,
+          });
+        }
+
+        // Dodaj FAQ
+        for (const faq of cleanData.faq) {
+          scrapedData.push({
+            url: faq.url,
+            type: "faq",
+            title: faq.title,
+            content: faq.content,
+            depth: 1,
+          });
+        }
+
+        // Dodaj kontakt
+        for (const contact of cleanData.contact) {
+          scrapedData.push({
+            url: contact.url,
+            type: "contact",
+            title: contact.title,
+            content: contact.content,
+            depth: 1,
+          });
+        }
+
+        console.log(
+          `✅ Przekształcono clean-data na ${scrapedData.length} elementów. Przechodzę do etapu przygotowania chunków...`
+        );
+        startScraping = true; // Ustaw flagę aby wyjść z pętli
+        skipToChunks = true; // Ustaw flagę aby ominąć scraping
+        break;
+      } catch (err) {
+        console.error(
+          "❌ Błąd wczytywania pliku clean-data.json:",
+          err.message
+        );
+        continue;
+      }
+    }
+
+    if (choice1 === "6") {
+      console.log("\n🚀 Rozpoczynam przesyłanie embeddingów do Pinecone...");
+
+      // Sprawdź czy mamy plik clean-data.json
+      try {
+        if (!fs.existsSync("data/clean-data.json")) {
+          console.log(
+            "❌ Plik data/clean-data.json nie istnieje. Najpierw uruchom parse-clean-data.js"
+          );
+          continue;
+        }
+
+        const cleanData = JSON.parse(
+          fs.readFileSync("data/clean-data.json", "utf8")
+        );
+        console.log(
+          `📁 Wczytano clean-data.json z ${cleanData.products.length} produktami i ${cleanData.categories.length} kategoriami`
+        );
+
+        // Import Pinecone client
+        const { PineconeClient } = require("./pinecone-client.js");
+
+        const pineconeClient = new PineconeClient();
+        await pineconeClient.initialize();
+
+        // Przekształć produkty na format dla embeddingów
+        const productsForEmbedding = [];
+
+        if (cleanData.products && Array.isArray(cleanData.products)) {
+          cleanData.products.forEach((product, index) => {
+            productsForEmbedding.push({
+              id: `product_${product.id || index}`,
+              text: `${product.name}${
+                product.description ? " - " + product.description : ""
+              }`,
+              metadata: {
+                name: product.name,
+                description: product.description || "",
+                price: product.price || "",
+                availability: product.availability || "",
+                category: product.parentCategory?.name || "Nieznana kategoria",
+                url: product.url || "",
+                brand: product.brand || "",
+                sku: product.id || "",
+                type: "product",
+              },
+            });
+          });
+        }
+
+        console.log(
+          `📊 Przygotowano ${productsForEmbedding.length} produktów do przesłania`
+        );
+
+        // Generuj embeddingi i prześlij do Pinecone
+        await pineconeClient.upsertEmbeddings(
+          productsForEmbedding,
+          async (text) => {
+            return await getEmbedding(text);
+          }
+        );
+
+        console.log("✅ Embeddingi zostały pomyślnie przesłane do Pinecone!");
+        continue;
+      } catch (error) {
+        console.error(
+          "❌ Błąd podczas przesyłania do Pinecone:",
+          error.message
+        );
+        continue;
+      }
+    }
   } // Koniec pętli while (!startScraping)
 
   // ETAP 2: Scraping stron (omiń jeśli wczytano dane z pliku)
@@ -1576,7 +2237,6 @@ async function crawl(startUrl = CRAWLER_CONFIG.baseUrl) {
     // Dodaj startowe URL-e
     const startUrls = [
       "https://www.tabou.pl",
-      "https://www.tabou.pl/rowery/",
       "https://www.tabou.pl/sklepy/",
       "https://www.tabou.pl/rowery/e-ebike/",
       "https://www.tabou.pl/rowery/gravel/",
