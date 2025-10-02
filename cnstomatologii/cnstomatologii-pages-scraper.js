@@ -401,11 +401,11 @@ async function main() {
 
     // Zapisz wyniki
     fs.writeFileSync(
-      "data/cnstomatologii-pages.json",
+      "data/cnstomatologii/cnstomatologii-pages.json",
       JSON.stringify(results, null, 2)
     );
     console.log(
-      `\\n✅ Zapisano ${results.length} stron do data/cnstomatologii-pages.json`
+      `\\n✅ Zapisano ${results.length} stron do data/cnstomatologii/cnstomatologii-pages.json`
     );
   } catch (error) {
     console.error("❌ Błąd głównej funkcji:", error.message);

@@ -1,24 +1,24 @@
 {
   "name": "ai-chat-shop",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "app.js",
   "type": "module",
   "scripts": {
-    "crawl": "node crawler.js",
-    "start": "node server.js",
-    "scrape:tabou": "node tabou/tabou-sitemap-scraper.js",
-    "scrape:tabou:test": "node tabou/tabou-sitemap-scraper.js --limit 5",
-    "scrape:pages": "node tabou/tabou-pages-scraper.js",
-    "scrape:pages:test": "node tabou/tabou-pages-scraper.js --limit 10",
+    "start": "node app.js",
+    "cron": "node cron-example.js",
+    "scrape:tabouproducts": "node tabou/tabou-sitemap-scraper.js",
+    "scrape:tabouproducts:test": "node tabou/tabou-sitemap-scraper.js --limit 5",
+    "scrape:taboupages": "node tabou/tabou-pages-scraper.js",
+    "scrape:taboupages:test": "node tabou/tabou-pages-scraper.js --limit 10",
     "scrape:cns": "node cnstomatologii/cnstomatologii-sitemap-scraper.js",
     "scrape:cns:test": "node cnstomatologii/cnstomatologii-sitemap-scraper.js --limit 5",
     "embed:file": "node tabou/tabou-embed-file.js",
-    "embed:tabou": "node tabou/tabou-embed-file.js --in data/tabou/tabou-products.json",
-    "embed:pages": "node tabou/tabou-embed-file.js --in data/tabou/tabou-pages.json",
-    "embed:cns": "node cnstomatologii/cnstomatologii-embed-file.js --in data/cnstomatologii-pages.json",
-    "pinecone:upload:products": "node pinecone-upload.js --in data/tabou/tabou-products_embbed.json",
-    "pinecone:upload:pages": "node pinecone-upload-pages.js --in data/tabou/tabou-pages_embbed.json",
-    "pinecone:upload:cns": "node cns-pinecone-upload.js --in data/cnstomatologii-pages_embbed.json"
+    "embed:tabouproducts": "node tabou/tabou-embed-file.js --in data/tabou/tabou-products.json",
+    "embed:taboupages": "node tabou/tabou-embed-file.js --in data/tabou/tabou-pages.json",
+    "embed:cns": "node cnstomatologii/cnstomatologii-embed-file.js --in data/cnstomatologii/cnstomatologii-pages.json",
+    "pinecone:upload:tabouproducts": "node pinecone/pinecone-upload.js --in data/tabou/tabou-products_embbed.json --index tabou-chat --namespace products --replace",
+    "pinecone:upload:taboupages": "node pinecone/pinecone-upload-pages.js --in data/tabou/tabou-pages_embbed.json --index tabou-chat --namespace pages --replace",
+    "pinecone:upload:cns": "node pinecone/cns-pinecone-upload.js --in data/cnstomatologii/cnstomatologii-pages_embbed.json --index cns-chat --namespace cnstomatologii --replace"
   },
   "dependencies": {
     "@pinecone-database/pinecone": "^3.0.0",
@@ -28,6 +28,7 @@
     "dayjs": "^1.11.18",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "node-cron": "^4.2.1",
     "node-fetch": "^3.3.2",
     "puppeteer": "^24.22.3"
   }

@@ -10,14 +10,21 @@ function parseArgs(argv) {
     in: null,
     namespace: "cnstomatologii",
     batchSize: 100,
+    indexName: null,
+    replace: false,
+    noBackup: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if ((a === "--in" || a === "-i") && argv[i + 1]) args.in = argv[++i];
     else if ((a === "--namespace" || a === "-n") && argv[i + 1])
       args.namespace = argv[++i];
+    else if ((a === "--index" || a === "--idx") && argv[i + 1])
+      args.indexName = argv[++i];
     else if (a === "--batch" && argv[i + 1])
       args.batchSize = parseInt(argv[++i], 10);
+    else if (a === "--replace" || a === "-r") args.replace = true;
+    else if (a === "--no-backup") args.noBackup = true;
   }
   return args;
 }
@@ -59,7 +66,14 @@ async function main() {
   const args = parseArgs(process.argv);
   if (!args.in && !fs.existsSync("data")) {
     console.log(
-      "Użycie: node cns-pinecone-upload.js --in <plik|folder> [--namespace ns] [--batch 100]"
+      "Użycie: node pinecone/cns-pinecone-upload.js --in <plik|folder> [--namespace ns] [--index nazwa] [--batch 100] [--replace] [--no-backup]"
+    );
+    console.log("Opcje:");
+    console.log(
+      "  --replace    : Zastąp wszystkie dane w namespace (domyślnie: dopisuj)"
+    );
+    console.log(
+      "  --no-backup  : Pomiń backup przed replace (używaj ostrożnie!)"
     );
     console.log(
       "Brak parametru --in, zostanie przeszukany katalog data/ pod kątem cnstomatologii*_embbed.json"
@@ -74,11 +88,16 @@ async function main() {
     process.exit(1);
   }
 
-  const client = new PineconeClient();
+  const client = new PineconeClient({
+    indexName: args.indexName,
+  });
   await client.initialize();
 
   let total = 0;
   const batchSize = args.batchSize;
+
+  // Zbierz wszystkie wektory z wszystkich plików
+  const allVectors = [];
 
   for (const file of files) {
     console.log(`📦 Przetwarzanie: ${path.basename(file)}`);
@@ -175,15 +194,36 @@ async function main() {
       `📄 ${path.basename(file)} → przygotowano ${vectors.length} wektorów`
     );
 
-    // Wysyłka w batchach
-    for (let i = 0; i < vectors.length; i += batchSize) {
-      const chunk = vectors.slice(i, i + batchSize);
+    allVectors.push(...vectors);
+  }
+
+  console.log(`📋 Łącznie przygotowano ${allVectors.length} wektorów`);
+
+  // Wybierz strategię upload
+  if (args.replace) {
+    console.log(
+      `🔄 Tryb REPLACE: zastępuję wszystkie dane w namespace '${args.namespace}'`
+    );
+    const result = await client.replaceNamespace(
+      args.namespace,
+      allVectors,
+      !args.noBackup
+    );
+    total = result.upserted;
+  } else {
+    console.log(
+      `➕ Tryb APPEND: dodaję nowe wektory do namespace '${args.namespace}'`
+    );
+
+    // Wysyłka w batchach (stary sposób)
+    for (let i = 0; i < allVectors.length; i += batchSize) {
+      const chunk = allVectors.slice(i, i + batchSize);
       try {
         const { upserted } = await client.upsertVectors(chunk, args.namespace);
         total += upserted;
         console.log(
           `✅ Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(
-            vectors.length / batchSize
+            allVectors.length / batchSize
           )} → upserted ${upserted} wektorów`
         );
       } catch (error) {
@@ -196,8 +236,17 @@ async function main() {
     }
   }
 
+  console.log(`🎉 Załadowano do Pinecone razem: ${total} wektorów`);
   console.log(
-    `🎉 Załadowano do Pinecone razem: ${total} wektorów (namespace='${args.namespace}')`
+    `📊 Indeks: ${
+      args.indexName || process.env.PINECONE_INDEX_NAME || "domyślny"
+    }`
+  );
+  console.log(`📁 Namespace: ${args.namespace}`);
+  console.log(
+    `🔄 Tryb: ${
+      args.replace ? "REPLACE (zastąpienie)" : "APPEND (dopisywanie)"
+    }`
   );
 
   // Podsumowanie typów danych

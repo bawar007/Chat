@@ -161,7 +161,7 @@ async function main() {
   if (!args.in) {
     console.error("❌ Brak parametru --in z plikiem wejściowym");
     console.log(
-      "Użycie: node cnstomatologii-embed-file.js --in data/cnstomatologii-pages.json [--out output.json]"
+      "Użycie: node cnstomatologii-embed-file.js --in data/cnstomatologii/cnstomatologii-pages.json [--out output.json]"
     );
     process.exit(1);
   }

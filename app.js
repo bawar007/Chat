@@ -6,7 +6,12 @@ import fs from "fs";
 import path from "path";
 import fetch from "node-fetch";
 import crypto from "crypto";
-import { PineconeClient } from "./pinecone-client.js";
+import { PineconeClient } from "./pinecone/pinecone-client.js";
+import { exec } from "child_process";
+import { promisify } from "util";
+import cron from "node-cron";
+
+const execPromise = promisify(exec);
 
 // --- Konfiguracja cache (embeddingi / odpowiedzi) ---
 // Używamy lekkiej implementacji LRU opartej na Map.
@@ -1139,6 +1144,330 @@ app.get("/api/status", (req, res) => {
     lastCrawl: crawlStats.scrapedAt || "Nieznane",
   });
 });
+
+// =================================================================
+// NOWE ENDPOINTY DO AUTOMATYZACJI SCRAPING + EMBEDDING + PINECONE
+// =================================================================
+
+const croneScrapperCns = async () => {
+  console.log("🚀 Uruchamiam pełny proces CNS (scrape + embed + pinecone)...");
+  await execPromise("npm run scrape:cns");
+  await execPromise("npm run embed:cns");
+  await execPromise("npm run pinecone:upload:cns");
+};
+
+// Endpoint do uruchamiania scrapingu
+app.post("/api/scrape", async (req, res) => {
+  try {
+    const { project } = req.body;
+
+    console.log(`🚀 Rozpoczynam scraping dla projektu: ${project}`);
+
+    if (!["cnstomatologii", "tabou"].includes(project)) {
+      return res.status(400).json({
+        error: "Nieprawidłowy projekt. Dozwolone: 'cnstomatologii', 'tabou'",
+      });
+    }
+
+    const results = {};
+
+    if (project === "cnstomatologii") {
+      // CNS: sitemap + pages + embedding
+
+      console.log("📄 Scraping pages...");
+      const pagesResult = await execPromise("npm run scrape:cns");
+      results.pages = {
+        success: true,
+        output: pagesResult.stdout,
+        error: pagesResult.stderr || null,
+      };
+
+      console.log("🧠 Generowanie embeddingów...");
+      const embedResult = await execPromise("npm run embed:cns");
+      results.embed = {
+        success: true,
+        output: embedResult.stdout,
+        error: embedResult.stderr || null,
+      };
+    } else if (project === "tabou") {
+      // TABOU: products + pages + embeddingi dla obu
+      console.log("📦 Scraping tabou products...");
+      const productsResult = await execPromise("npm run scrape:tabouproducts");
+      results.products = {
+        success: true,
+        output: productsResult.stdout,
+        error: productsResult.stderr || null,
+      };
+
+      console.log("📄 Scraping tabou pages...");
+      const pagesResult = await execPromise("npm run scrape:taboupages");
+      results.pages = {
+        success: true,
+        output: pagesResult.stdout,
+        error: pagesResult.stderr || null,
+      };
+
+      console.log("🧠 Generowanie embeddingów products...");
+      const embedProductsResult = await execPromise(
+        "npm run embed:tabouproducts"
+      );
+      results.embedProducts = {
+        success: true,
+        output: embedProductsResult.stdout,
+        error: embedProductsResult.stderr || null,
+      };
+
+      console.log("🧠 Generowanie embeddingów pages...");
+      const embedPagesResult = await execPromise("npm run embed:taboupages");
+      results.embedPages = {
+        success: true,
+        output: embedPagesResult.stdout,
+        error: embedPagesResult.stderr || null,
+      };
+    }
+
+    console.log("✅ Scraping i embedding zakończone pomyślnie");
+
+    res.json({
+      success: true,
+      project,
+      message: `Scraping i embedding zakończone dla projektu ${project}`,
+      results,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Błąd podczas scrapingu:", error);
+    res.status(500).json({
+      success: false,
+      error: "Błąd podczas wykonywania scrapingu",
+      details: error.message,
+      stderr: error.stderr || null,
+    });
+  }
+});
+
+// Endpoint do synchronizacji z Pinecone
+app.post("/api/sync-pinecone", async (req, res) => {
+  try {
+    const { project } = req.body;
+
+    console.log(`📌 Rozpoczynam synchronizację z Pinecone dla: ${project}`);
+
+    if (!["cnstomatologii", "tabou"].includes(project)) {
+      return res.status(400).json({
+        error: "Nieprawidłowy projekt. Dozwolone: 'cnstomatologii', 'tabou'",
+      });
+    }
+
+    const results = {};
+
+    if (project === "cnstomatologii") {
+      console.log("🔄 Upload CNS do Pinecone...");
+      const syncResult = await execPromise("npm run pinecone:upload:cns");
+      results.sync = {
+        success: true,
+        output: syncResult.stdout,
+        error: syncResult.stderr || null,
+      };
+    } else if (project === "tabou") {
+      console.log("🔄 Upload tabou products do Pinecone...");
+      const syncProductsResult = await execPromise(
+        "npm run pinecone:upload:tabouproducts"
+      );
+      results.syncProducts = {
+        success: true,
+        output: syncProductsResult.stdout,
+        error: syncProductsResult.stderr || null,
+      };
+
+      console.log("🔄 Upload tabou pages do Pinecone...");
+      const syncPagesResult = await execPromise(
+        "npm run pinecone:upload:taboupages"
+      );
+      results.syncPages = {
+        success: true,
+        output: syncPagesResult.stdout,
+        error: syncPagesResult.stderr || null,
+      };
+    }
+
+    console.log("✅ Synchronizacja z Pinecone zakończona pomyślnie");
+
+    res.json({
+      success: true,
+      project,
+      message: `Synchronizacja z Pinecone zakończona dla projektu ${project}`,
+      results,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("❌ Błąd podczas synchronizacji z Pinecone:", error);
+    res.status(500).json({
+      success: false,
+      error: "Błąd podczas synchronizacji z Pinecone",
+      details: error.message,
+      stderr: error.stderr || null,
+    });
+  }
+});
+
+// =================================================================
+// FUNKCJE CRON DO AUTOMATYCZNEGO SCRAPINGU
+// =================================================================
+
+// Funkcja do automatycznego scrapingu CNS
+async function croneScrapperCns() {
+  try {
+    console.log("🕐 CRON: Rozpoczynam automatyczny scraping CNS...");
+
+    // Scraping sitemap
+    console.log("📋 CRON: Scraping sitemap...");
+    const sitemapResult = await execPromise("npm run scrape:cns");
+    console.log("✅ CRON: Sitemap zakończony");
+
+    // Scraping pages
+    console.log("📄 CRON: Scraping pages...");
+    const pagesResult = await execPromise(
+      "node cnstomatologii/cnstomatologii-pages-scraper.js"
+    );
+    console.log("✅ CRON: Pages zakończony");
+
+    // Generowanie embeddingów
+    console.log("🧠 CRON: Generowanie embeddingów...");
+    const embedResult = await execPromise("npm run embed:cns");
+    console.log("✅ CRON: Embeddingi zakończone");
+
+    // Upload do Pinecone
+    console.log("📌 CRON: Upload do Pinecone...");
+    const uploadResult = await execPromise("npm run pinecone:upload:cns");
+    console.log("✅ CRON: Upload zakończony");
+
+    console.log("🎉 CRON: Automatyczny scraping CNS zakończony pomyślnie!");
+
+    // Zapisz log sukcesu
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      status: "success",
+      type: "cron-scraping-cns",
+      message: "Automatyczny scraping CNS zakończony pomyślnie",
+    };
+
+    const logFile = "data/cron-logs.json";
+    let logs = [];
+    if (fs.existsSync(logFile)) {
+      logs = JSON.parse(fs.readFileSync(logFile, "utf8"));
+    }
+    logs.push(logEntry);
+
+    // Zachowaj tylko ostatnie 50 logów
+    if (logs.length > 50) {
+      logs = logs.slice(-50);
+    }
+
+    fs.writeFileSync(logFile, JSON.stringify(logs, null, 2));
+  } catch (error) {
+    console.error("❌ CRON: Błąd podczas automatycznego scrapingu CNS:", error);
+
+    // Zapisz log błędu
+    const logEntry = {
+      timestamp: new Date().toISOString(),
+      status: "error",
+      type: "cron-scraping-cns",
+      message: error.message,
+      stderr: error.stderr || null,
+    };
+
+    const logFile = "data/cron-logs.json";
+    let logs = [];
+    if (fs.existsSync(logFile)) {
+      logs = JSON.parse(fs.readFileSync(logFile, "utf8"));
+    }
+    logs.push(logEntry);
+
+    // Zachowaj tylko ostatnie 50 logów
+    if (logs.length > 50) {
+      logs = logs.slice(-50);
+    }
+
+    fs.writeFileSync(logFile, JSON.stringify(logs, null, 2));
+  }
+}
+
+// Harmonogram CRON
+// Uruchom o 12:00 i 23:59 każdego dnia
+cron.schedule(
+  "0 12 * * *",
+  () => {
+    console.log("🕐 CRON: Uruchamiam scraping CNS o 12:00");
+    croneScrapperCns();
+  },
+  {
+    scheduled: true,
+    timezone: "Europe/Warsaw",
+  }
+);
+
+cron.schedule(
+  "59 23 * * *",
+  () => {
+    console.log("🕐 CRON: Uruchamiam scraping CNS o 23:59");
+    croneScrapperCns();
+  },
+  {
+    scheduled: true,
+    timezone: "Europe/Warsaw",
+  }
+);
+
+console.log("⏰ CRON: Harmonogram ustawiony - scraping CNS o 12:00 i 23:59");
+
+// Endpoint do sprawdzania logów cron
+app.get("/api/cron-logs", (req, res) => {
+  try {
+    const logFile = "data/cron-logs.json";
+    if (!fs.existsSync(logFile)) {
+      return res.json({
+        logs: [],
+        message: "Brak logów cron",
+      });
+    }
+
+    const logs = JSON.parse(fs.readFileSync(logFile, "utf8"));
+    res.json({
+      logs: logs.reverse(), // Najnowsze na górze
+      total: logs.length,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Błąd odczytu logów cron",
+      details: error.message,
+    });
+  }
+});
+
+// Endpoint do ręcznego uruchomienia cron
+app.post("/api/run-cron", async (req, res) => {
+  try {
+    console.log("🔄 Ręczne uruchomienie cron scraping CNS...");
+
+    // Uruchom w tle
+    croneScrapperCns();
+
+    res.json({
+      success: true,
+      message: "Cron scraping CNS został uruchomiony w tle",
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: "Błąd uruchamiania cron",
+      details: error.message,
+    });
+  }
+});
+
+// =================================================================
 
 // Inicjalizacja Pinecone przy starcie serwera
 initializePinecone();

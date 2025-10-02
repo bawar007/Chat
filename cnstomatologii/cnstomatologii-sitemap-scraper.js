@@ -14,7 +14,7 @@ const log = (...args) => console.log("[CNS]", ...args);
 // Ustawienia domyślne
 const DEFAULTS = {
   sitemapUrl: "https://cnstomatologii.pl/page-sitemap.xml",
-  outFile: path.resolve("data", "cnstomatologii-pages.json"),
+  outFile: path.resolve("data/cnstomatologii", "cnstomatologii-pages.json"),
   concurrency: 3,
   timeoutMs: 15000,
   pageTimeoutMs: 20000,

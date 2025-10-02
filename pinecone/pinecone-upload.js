@@ -59,7 +59,7 @@ async function main() {
   const args = parseArgs(process.argv);
   if (!args.in && !fs.existsSync("data")) {
     console.log(
-      "Użycie: node pinecone-upload.js --in <plik|folder> [--namespace ns] [--batch 100]"
+      "Użycie: node pinecone/pinecone-upload.js --in <plik|folder> [--namespace ns] [--batch 100]"
     );
     console.log(
       "Brak parametru --in, zostanie przeszukany katalog data/ pod kątem *_embbed.json"
